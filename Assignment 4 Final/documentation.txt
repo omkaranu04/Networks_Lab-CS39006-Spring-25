@@ -1,0 +1,282 @@
+==============================
+Assignment 4 Final Submission
+Name: Omkar Bhandare
+Roll Number: 22CS30016
+==============================
+
+--------------------------------------------------------
+Constants:
+HEADERSIZE = 4
+MESSAGELEN = 512
+MAXMESSAGE = 10
+MAXSOCKETS = 5
+p = 0.5 (can be varied)
+T = 10 (can be varied)
+GCTIMEOUT = 1 (timeout for garbage collection)
+SEQNUM = 256
+SOCK_KTP = KTP_SOCK = 16 (can be used interchangeably)
+ENOSPACE = 9000
+ENOTBOUND = 9001
+ENOMESSAGE = 9002
+--------------------------------------------------------
+
+---------------------------------------------------------------------------------
+Data Structures:
+struct window
+    - int size          : size of the window
+    - int head, tail    : to maintain front and back of the window
+
+struct buffer
+    - char buff         : buffer to store the message 
+    - int fillled       : current number of messages in the buffer
+    - int iter          : current buffer position
+    - int isempty       : to check if buffer slots are empty
+
+struct ip_port
+    - uint32_t ip       : ip address
+    - uint16_t port     : port number
+
+struct ktp_socket
+    - int in_use                : to check if the socket is in use
+    - int is_bound              : to check if the socket is bound
+    - int is_closed             : to check if the socket is closed
+    - int sockfd                : socket file descriptor of UDP
+    - int pid                   : process id of the socket
+    - struct ip_port dest       : destination ip and port
+    - struct ip_port src        : source ip and port
+    - struct buffer send_buffer : buffer to store the messages to be sent
+    - struct buffer recv_buffer : buffer to store the messages received
+    - struct window swnd        : send window
+    - struct window rwnd        : receive window
+    - int last_acked            : last acked message
+    - int nospace               : flag for no space in buffer
+    - char socket_mutex[10]     : mutex for the socket
+
+struct SMData
+    - struct ktp_socket         : array of ktp_sockets in shared memory
+
+struct timeout
+    - time_t time               : timestamp of last transmission
+    - int head, tail            : window boundaries at last transmission time
+---------------------------------------------------------------------------------
+
+---------------------------------------------------------------------------------
+Functions (ksocket.h and ksocket.c):
+void lock_socket(sem_t *mutex);
+-Helper function to lock the socket
+Parameters:
+    - sem_t *mutex : mutex of the socket
+
+void unlock_socket(sem_t *mutex);
+-Helper function to unlock the socket
+Parameters:
+    - sem_t *mutex : mutex of the socket
+
+SMData *get_shm();
+-Retrieves the shared memory segment
+Returns:
+    - SMData * : pointer to the shared memory segment
+
+void sockreset(ktp_socket *sock);
+-Resets the socket to initial state
+Parameters:
+    - ktp_socket *sock : socket entry in shared memory to be reset
+
+int check_socket_validity(int sockfd, SMData *shm, sem_t *mutex);
+-Checks if the socket is valid or not to use
+Parameters:
+    - int sockfd : sockfd of the socket
+    - SMData *shm : shared memory segment
+    - sem_t *mutex : mutex of the socket
+
+int k_socket(int domain, int type, int protocol);
+-Allocates a new KTP socket from the shared memory
+Parameters:
+    - int domain : domain of the socket
+    - int type : type of the socket
+    - int protocol : protocol of the socket
+Returns:
+    - int : the allocated KTP socket index in the shared memory
+
+int k_bind(int sockfd, in_addr_t src_ip, in_port_t src_port, in_addr_t dest_ip, in_port_t dest_port);
+-Associates the socket with the source and destination IP and port
+Parameters:
+    - int sockfd : index of the socket in shared memory
+    - in_addr_t src_ip : source IP address
+    - in_port_t src_port : source port number
+    - in_addr_t dest_ip : destination IP address
+    - in_port_t dest_port : destination port number
+Returns:
+    - int : 0 on success, -1 on failure
+
+ssize_t k_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *addr, socklen_t addrlen);
+-Writes the message to the send buffer of the socket
+Parameters:
+    - int sockfd : index of the socket in shared memory
+    - const void *buf : message to be sent
+    - size_t len : length of the message
+    - int flags : flags for the send (reduntant)
+    - const struct sockaddr *addr : destination address
+    - socklen_t addrlen : length of the address
+Returns:
+    - ssize_t : number of bytes written in the buffer
+
+int k_recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *addr, socklen_t *addrlen);
+-Reads the message from the receive buffer of the socket
+Parameters:
+    - int sockfd : index of the socket in shared memory
+    - void *buf : buffer to store the message
+    - size_t len : length of the buffer
+    - int flags : flags for the receive (reduntant)
+    - struct sockaddr *addr : source address
+    - socklen_t *addrlen : length of the address
+Returns:
+    - int : number of bytes read from the buffer
+
+int k_close(int sockfd);
+-Marks the socket as closed and resets the socket
+Parameters:
+    - int sockfd : indexof the socket in shared memory
+Returns:
+    - int : 0 on success, -1 on failure
+---------------------------------------------------------------------------------
+
+---------------------------------------------------------------------------------
+Functions (initksocket.c)
+int drop_message();
+-Helper function to drop the message based on the probability
+Returns:
+    - int : 1 if message is to be dropped, 0 otherwise
+
+ssize_t createACKpacket(char *buf, int n, int seq, int ack, int recv_wndw);
+-Creates the ACK packet
+Parameters:
+    - char *buf : buffer to store the packet
+    - int n : message number
+    - int seq : sequence number
+    - int ack : ack number
+    - int recv_wndw : receive window size
+Returns:
+    - ssize_t : length of the packet
+
+ssize_t createDATApacket(char *buf, int n, char *data, int seq, int ack, int recv_wndw);
+-Creates the DATA packet
+Parameters:
+    - char *buf : buffer to store the packet
+    - int n : message number
+    - char *data : message to be sent
+    - int seq : sequence number
+    - int ack : ack number (reduntant here, just for header norm purposes)
+    - int recv_wndw : receive window size
+Returns:
+    - ssize_t : length of the packet
+
+ssize_t open_packet(char *buf, int n, int *seq, int *ack, int *is_ack, int *recv_wndw, char *data);
+-Opens the packet and extracts the information
+Parameters:
+    - char *buf : buffer to store the packet
+    - int n : message number
+    - int *seq : sequence number
+    - int *ack : ack number
+    - int *is_ack : flag to check if the packet is ACK
+    - int *recv_wndw : receive window size
+    - char *data : message received
+Returns:
+    - ssize_t : length of the packet'
+
+int inwndw(int seq, int head, int tail);
+-Checks if the sequence number is in the window
+Parameters:
+    - int seq : sequence number
+    - int head : head of the window
+    - int tail : tail of the window
+Returns:
+    - int : 1 if in window, 0 otherwise
+
+int wndwsize(struct window *wndw);
+-Returns the size of the window
+Parameters:
+    - struct window *wndw : window
+Returns:
+    - int : size of the window
+
+void helper(ktp_socket *sock, char *buff, int n, struct sockaddr_in addr);
+-Process the incoming packets. either be ACK or DATA packets
+Parameters:
+    - ktp_socket *sock : socket entry in shared memory
+    - char *buff : buffer to store the message
+    - int n : message number
+    - struct sockaddr_in addr : source address
+
+void handle_timeout_cases(SMData *shm, sem_t *mutexes[], time_t timestamps[]);
+-Handles the timeout cases
+Parameters:
+    - SMData *shm : shared memory segment
+    - sem_t *mutexes[] : array of mutexes
+    - time_t timestamps[] : array of timestamps
+
+void process_incoming_data(SMData *shm, sem_t *mutexes[], fd_set *all_fds);
+-Processes the incoming data
+Parameters:
+    - SMData *shm : shared memory segment
+    - sem_t *mutexes[] : array of mutexes
+    - fd_set *all_fds : set of file descriptors
+
+void *RThread();
+-Thread to receive the incoming packets
+
+void send_packet_segment(ktp_socket *socket, int segment_head, int segment_tail);
+-Sends the packet segment
+Parameters:
+    - ktp_socket *socket : socket entry in shared memory
+    - int segment_head : head of the segment
+    - int segment_tail : tail of the segment
+
+void handle_timeout(struct timeout timeouts[MAXSOCKETS][2], int i, time_t updated_time, int *toSend, ktp_socket *socket);
+-Handles the timeout
+Parameters:
+    - struct timeout timeouts[MAXSOCKETS][2] : array of timeouts
+    - int i : index of the socket
+    - time_t updated_time : updated time
+    - int *toSend : flag to check if the packet is to be sent
+    - ktp_socket *socket : socket entry in shared memory
+
+void *SThread();
+-Thread to send the packets
+
+void *GCThread();
+-Thread to garbage collect the sockets
+
+int bind_if_required(int socket_index, ktp_socket *socket_ptr);
+-Helper function to bind the socket if not bound
+Parameters:
+    - int socket_index : index of the socket in shared memory
+    - ktp_socket *socket_ptr : socket entry in shared memory
+Returns:
+    - int : 0 on success, -1 on failure
+
+void handler(int signum);
+-Signal handler for SIGINT and SIGSEGV
+Parameters:
+    - int signum : signal number
+---------------------------------------------------------------------------------
+
+--------------------------------------------------------
+Packet Statistics: (Analysis was done using WireShark)
+- Packet size: 512 bytes
+- File size: 100 KB 
+- Number of packets: 200
+
+Prob        |Data Packets   |Ratio       |
+0.00        |200            |1.000       |
+0.05        |318            |1.590       |
+0.1         |320            |1.600       |
+0.15        |413            |2.065       |
+0.2         |423            |2.115       |
+0.25        |450            |2.250       |
+0.3         |470            |2.350       |
+0.35        |512            |2.560       |
+0.4         |600            |3.000       |
+0.45        |713            |3.565       |
+0.5         |956            |4.780       |
+--------------------------------------------------------
